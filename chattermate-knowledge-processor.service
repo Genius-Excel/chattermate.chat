@@ -1,0 +1,14 @@
+[Unit]
+Description=ChatterMate Knowledge Processor
+After=network.target
+
+[Service]
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/chattermate.chat/backend
+Environment="PATH=/home/ubuntu/chatenv/bin/"
+ExecStart=/home/ubuntu/chatenv/bin/python -m app.workers.run_knowledge_processor
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
