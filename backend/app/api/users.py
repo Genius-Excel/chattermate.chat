@@ -33,7 +33,7 @@ from app.core.security import create_access_token, create_refresh_token, verify_
 from app.core.auth import get_current_user, require_permissions
 from app.core.logger import get_logger
 from app.repositories.user import UserRepository
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from app.models.role import Role
 from app.core.s3 import get_s3_signed_url, upload_file_to_s3, delete_file_from_s3
 from app.core.config import settings
@@ -44,6 +44,36 @@ try:
     HAS_ENTERPRISE = True
 except ImportError:
     HAS_ENTERPRISE = False
+
+# Import additional dependencies for bootstrap
+from app.models.organization import Organization
+from app.models.permission import Permission
+from app.repositories.organization import OrganizationRepository
+from app.repositories.role import RoleRepository
+from app.models.schemas.organization import OrganizationBase
+
+
+class AdminUserCreate(BaseModel):
+    """Schema for admin user creation during bootstrap"""
+    email: EmailStr
+    full_name: str
+    password: str
+
+
+class BootstrapRequest(BaseModel):
+    """Schema for bootstrap request to create initial organization and admin user"""
+    organization: OrganizationBase
+    admin_user: AdminUserCreate
+
+
+class BootstrapResponse(BaseModel):
+    """Response schema for bootstrap endpoint"""
+    message: str
+    organization: dict
+    admin_user: dict
+    access_token: str
+    refresh_token: str
+
 
 logger = get_logger(__name__)
 router = APIRouter(
@@ -804,4 +834,97 @@ async def delete_profile_pic(
         )
 
 
+@router.post("/bootstrap", response_model=BootstrapResponse)
+async def bootstrap(
+    bootstrap_data: BootstrapRequest,
+    db: Session = Depends(get_db)
+):
+    """Bootstrap the application with initial organization and admin user.
+    This endpoint can only be used when no organizations exist."""
+    try:
+        # Check if any organization already exists
+        existing_org = db.query(Organization).first()
+        if existing_org:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="System is already bootstrapped. Organizations already exist."
+            )
 
+        # Create organization
+        org_repo = OrganizationRepository(db)
+        organization = org_repo.create_organization(
+            name=bootstrap_data.organization.name,
+            domain=bootstrap_data.organization.domain,
+            timezone=bootstrap_data.organization.timezone,
+            business_hours=bootstrap_data.organization.business_hours
+        )
+
+        # Create admin role with super_admin permission
+        role_repo = RoleRepository(db)
+        
+        # Check if super_admin permission exists, create if not
+        super_admin_permission = db.query(Permission).filter(Permission.name == "super_admin").first()
+        if not super_admin_permission:
+            super_admin_permission = Permission(name="super_admin", description="Has all permissions")
+            db.add(super_admin_permission)
+            db.commit()
+
+        admin_role = role_repo.create_role(
+            name="Super Admin",
+            description="Administrator role with all permissions",
+            organization_id=organization.id
+        )
+
+        # Assign super_admin permission to admin role
+        admin_role.permissions.append(super_admin_permission)
+        db.commit()
+
+        # Create admin user
+        user_repo = UserRepository(db)
+        admin_user = user_repo.create_user(
+            email=bootstrap_data.admin_user.email,
+            full_name=bootstrap_data.admin_user.full_name,
+            hashed_password=User.get_password_hash(bootstrap_data.admin_user.password),
+            organization_id=organization.id,
+            is_active=True,
+            role_id=admin_role.id
+        )
+
+        # Generate tokens
+        token_data = {"sub": str(admin_user.id), "org": str(organization.id)}
+        access_token = create_access_token(token_data)
+        refresh_token = create_refresh_token(token_data)
+
+        return {
+            "message": "Bootstrap successful! You can now log in with your admin credentials.",
+            "organization": organization.to_dict(),
+            "admin_user": admin_user.to_dict(),
+            "access_token": access_token,
+            "refresh_token": refresh_token
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bootstrap failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Bootstrap failed: {str(e)}"
+        )
+
+
+@router.get("/bootstrap-status")
+async def bootstrap_status(db: Session = Depends(get_db)):
+    """Check if the system needs to be bootstrapped"""
+    try:
+        org_exists = db.query(Organization).first() is not None
+        return {
+            "needs_bootstrap": not org_exists,
+            "message": "System already bootstrapped" if org_exists else "System needs to be bootstrapped"
+        }
+    except Exception as e:
+        logger.error(f"Failed to check bootstrap status: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check bootstrap status"
+        )
