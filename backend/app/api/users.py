@@ -300,11 +300,14 @@ async def login(
         refresh_token = create_refresh_token(token_data)
 
         # Set secure cookies
+        # In development, don't require secure flag for cookies
+        is_production = settings.ENVIRONMENT == "production"
+        
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=True,
+            secure=is_production,  # Only secure in production
             samesite="lax",
             max_age=1800  # 30 minutes
         )
@@ -312,7 +315,7 @@ async def login(
             key="refresh_token",
             value=refresh_token,
             httponly=True,
-            secure=True,
+            secure=is_production,  # Only secure in production
             samesite="lax",
             max_age=604800  # 7 days
         )
@@ -427,11 +430,14 @@ async def refresh_token(
         refresh_token = create_refresh_token(token_data)
 
         # Set secure cookies
+        # In development, don't require secure flag for cookies
+        is_production = settings.ENVIRONMENT == "production"
+        
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=True,
+            secure=is_production,  # Only secure in production
             samesite="lax",
             max_age=1800  # 30 minutes
         )
@@ -439,7 +445,7 @@ async def refresh_token(
             key="refresh_token",
             value=refresh_token,
             httponly=True,
-            secure=True,
+            secure=is_production,  # Only secure in production
             samesite="lax",
             max_age=604800  # 7 days
         )
@@ -837,6 +843,7 @@ async def delete_profile_pic(
 @router.post("/bootstrap", response_model=BootstrapResponse)
 async def bootstrap(
     bootstrap_data: BootstrapRequest,
+    response: Response,
     db: Session = Depends(get_db)
 ):
     """Bootstrap the application with initial organization and admin user.
@@ -895,6 +902,42 @@ async def bootstrap(
         access_token = create_access_token(token_data)
         refresh_token = create_refresh_token(token_data)
 
+        # Set secure cookies (same as login endpoint)
+        # In development, don't require secure flag for cookies
+        is_production = settings.ENVIRONMENT == "production"
+        
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=is_production,  # Only secure in production
+            samesite="lax",
+            max_age=1800  # 30 minutes
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=is_production,  # Only secure in production
+            samesite="lax",
+            max_age=604800  # 7 days
+        )
+
+        # Set session data with role information
+        user_info = json.dumps({
+            "id": str(admin_user.id),
+            "email": admin_user.email,
+            "full_name": admin_user.full_name,
+            "organization_id": str(organization.id),
+            "role": admin_role.to_dict()
+        }, default=str)
+        response.set_cookie(
+            key="user_info",
+            value=quote(user_info),  # URL encode the JSON string
+            samesite="lax",
+            max_age=604800  # 7 days
+        )
+
         return {
             "message": "Bootstrap successful! You can now log in with your admin credentials.",
             "organization": organization.to_dict(),
@@ -928,3 +971,40 @@ async def bootstrap_status(db: Session = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to check bootstrap status"
         )
+
+
+@router.get("/debug/auth-status")
+async def debug_auth_status(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check authentication status and cookies"""
+    try:
+        cookies = dict(request.cookies)
+        headers = dict(request.headers)
+        
+        # Try to get current user if possible
+        auth_info = {
+            "cookies_present": {
+                "access_token": "access_token" in cookies,
+                "refresh_token": "refresh_token" in cookies,
+                "user_info": "user_info" in cookies
+            },
+            "authorization_header": headers.get("authorization", "Not present"),
+            "cookie_count": len(cookies)
+        }
+        
+        # If access token is present, try to decode it
+        if cookies.get("access_token"):
+            try:
+                payload = verify_token(cookies["access_token"])
+                auth_info["token_valid"] = payload is not None
+                auth_info["token_payload"] = payload if payload else "Invalid token"
+            except Exception as e:
+                auth_info["token_valid"] = False
+                auth_info["token_error"] = str(e)
+        
+        return auth_info
+        
+    except Exception as e:
+        return {"error": str(e)}
