@@ -67,6 +67,20 @@ class Organization(Base):
     jira_tokens = relationship("JiraToken", back_populates="organization", cascade="all, delete-orphan")
     shopify_shops = relationship("ShopifyShop", back_populates="organization", cascade="all, delete-orphan")
     
+    def to_dict(self):
+        """Convert organization object to dictionary"""
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "domain": self.domain,
+            "timezone": self.timezone,
+            "business_hours": self.business_hours,
+            "settings": self.settings,
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at
+        }
+    
     class Config:
         orm_mode = True
 
