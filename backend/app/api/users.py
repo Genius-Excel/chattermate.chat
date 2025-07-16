@@ -279,10 +279,16 @@ async def login(
             User.is_active == True
         ).first()
         logger.info(f"User login attempt for {form_data.username}")
-        if not user or not user.verify_password(form_data.password):
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
+                detail="no user with this details",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not user.verify_password(form_data.password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not verify user credentials password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
