@@ -271,14 +271,14 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    """Authenticate user and set cookies"""
+    """Authenticate user and set cookies """
     try:
         # Verify credentials
         user = db.query(User).filter(
             User.email == form_data.username,
             User.is_active == True
         ).first()
-  
+        logger.info(f"User login attempt for {form_data.username}")
         if not user or not user.verify_password(form_data.password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -352,8 +352,9 @@ async def login(
             }
         }
 
-    except HTTPException:
-        raise
+    except HTTPException as g:
+        logger.error(f"Login failed for {form_data.username}. Error: {g}")
+        raise g  # Re-raise the HTTPException so it's properly handled
     except Exception as e:
         logger.error(f"Login failed: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -869,9 +870,13 @@ async def bootstrap(
         # Create admin role with super_admin permission
         role_repo = RoleRepository(db)
         
-        # Check if super_admin permission exists, create if not
+        # Create all default permissions if they don't exist
+        Permission.create_default_permissions(db)
+        
+        # Get the super_admin permission
         super_admin_permission = db.query(Permission).filter(Permission.name == "super_admin").first()
         if not super_admin_permission:
+            # This should not happen after creating default permissions, but just in case
             super_admin_permission = Permission(name="super_admin", description="Has all permissions")
             db.add(super_admin_permission)
             db.commit()
