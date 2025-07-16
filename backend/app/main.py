@@ -70,11 +70,23 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Configure Socket.IO on startup"""
+    """Configure Socket.IO on startup and initialize database"""
     configure_socketio(cors_origins)
     
     # Start CORS listener for multi-worker synchronization
     initialize_cors_listener()
+    
+    # Initialize database with default data
+    from app.core.db_init import initialize_database
+    from app.database import SessionLocal
+    
+    db = SessionLocal()
+    try:
+        initialize_database(db)
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {str(e)}")
+    finally:
+        db.close()
 
 # Include routers
 app.include_router(
