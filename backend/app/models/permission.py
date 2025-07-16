@@ -59,3 +59,19 @@ class Permission(Base):
             ("view_subscription", "Can view subscription details"),
             ("super_admin", "Has all permissions")
         ]
+
+    @classmethod
+    def create_default_permissions(cls, db_session):
+        """Create default permissions if they don't exist"""
+        for name, description in cls.default_permissions():
+            # Check if permission already exists
+            existing = db_session.query(cls).filter(cls.name == name).first()
+            if not existing:
+                permission = cls(name=name, description=description)
+                db_session.add(permission)
+                print(f"Created permission: {name}")
+            else:
+                print(f"Permission already exists: {name}")
+        
+        db_session.commit()
+        return True
