@@ -107,6 +107,76 @@ async def save_file(file: UploadFile, organization_id: UUID) -> str:
         return f"/{file_path}"
 
 
+@router.post("/", response_model=AgentWithCustomizationResponse)
+async def create_agent(
+    create_data: AgentCreate,
+    current_user: User = Depends(require_permissions("manage_agents")),
+    db: Session = Depends(get_db)
+):
+    """Create a new agent"""
+    try:
+        agent_repo = AgentRepository(db)
+        knowledge_repo = KnowledgeRepository(db)
+
+        # Validate that the organization_id matches the current user's organization
+        if create_data.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to create agent for this organization"
+            )
+
+        # Create the agent
+        agent = agent_repo.create_agent(
+            name=create_data.name,
+            agent_type=create_data.agent_type,
+            instructions=create_data.instructions,
+            org_id=create_data.organization_id,
+            description=create_data.description,
+            tools=create_data.tools,
+            is_default=create_data.is_default,
+            is_active=create_data.is_active
+        )
+
+        db.commit()
+        db.refresh(agent)
+
+        # Get knowledge sources for response (will be empty for new agent)
+        knowledge_items = knowledge_repo.get_by_agent(agent.id)
+
+        # Prepare response
+        response = AgentWithCustomizationResponse(
+            id=agent.id,
+            name=agent.name,
+            display_name=agent.display_name or agent.name,  # Use name as fallback if display_name is None
+            description=agent.description,
+            agent_type=agent.agent_type,
+            instructions=agent.instructions,
+            is_active=agent.is_active,
+            organization_id=agent.organization_id,
+            customization=None,  # New agent won't have customization yet
+            transfer_to_human=agent.transfer_to_human or False,
+            ask_for_rating=agent.ask_for_rating or False,
+            enable_rate_limiting=agent.enable_rate_limiting or False,
+            overall_limit_per_ip=agent.overall_limit_per_ip or 100,
+            requests_per_sec=agent.requests_per_sec or 1.0,
+            knowledge=[{
+                "id": k.id,
+                "name": k.source,
+                "type": k.source_type
+            } for k in knowledge_items],
+            groups=agent.groups or []
+        )
+
+        return response
+
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise e
+    except Exception as e:
+        logger.error(f"Agent creation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/{agent_id}", response_model=AgentWithCustomizationResponse)
 async def update_agent(
     agent_id: UUID,
@@ -613,3 +683,47 @@ async def generate_instructions(
             status_code=500,
             detail="Failed to generate instructions"
         )
+
+
+
+@router.delete("/{agent_id}")
+async def delete_agent(
+    agent_id: UUID,
+    current_user: User = Depends(require_permissions("manage_agents")),
+    db: Session = Depends(get_db)
+):
+    """Delete (soft delete) an agent"""
+    try:
+        agent_repo = AgentRepository(db)
+        
+        # Get existing agent
+        agent = agent_repo.get_by_id(agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        # Verify organization access
+        if agent.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to delete this agent"
+            )
+
+        # Soft delete the agent
+        success = agent_repo.delete_agent(str(agent_id))
+        
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to delete agent"
+            )
+        
+        return {"message": "Agent deleted successfully"}
+
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise e
+    except Exception as e:
+        logger.error(f"Agent deletion error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
